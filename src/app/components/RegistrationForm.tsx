@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { supabase, isSupabaseConfigured } from "@/lib/supabaseClient";
 
 // 드롭다운 옵션 정의
 const TEAM_OPTIONS = [
@@ -58,6 +59,9 @@ export default function RegistrationForm() {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitted, setSubmitted] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  // 제출 단계에서 발생한 폼 전체 에러(네트워크/서버 등)
+  const [submitError, setSubmitError] = useState<string | null>(null);
   // 프론트엔드에서만 중복 이메일 방지
   const [submittedEmails, setSubmittedEmails] = useState<string[]>([]);
 
@@ -93,8 +97,9 @@ export default function RegistrationForm() {
     return next;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setSubmitError(null);
 
     const validationErrors = validate();
     if (Object.keys(validationErrors).length > 0) {
@@ -104,8 +109,37 @@ export default function RegistrationForm() {
 
     const payload = { ...form, name: form.name.trim(), email: form.email.trim() };
 
-    // TODO: 추후 Supabase 연결. 지금은 콘솔에만 출력.
-    console.log("신청 데이터:", payload);
+    // Supabase 미설정 시: 기존처럼 콘솔에만 출력하고 완료 처리(개발/미연동 환경 안전장치).
+    if (!isSupabaseConfigured || !supabase) {
+      console.log("신청 데이터(Supabase 미연동):", payload);
+      setSubmittedEmails((prev) => [...prev, payload.email.toLowerCase()]);
+      setSubmitted(true);
+      return;
+    }
+
+    // signups 테이블 컬럼명에 맞춰 매핑해서 insert.
+    setSubmitting(true);
+    const { error } = await supabase.from("signups").insert({
+      name: payload.name,
+      email: payload.email,
+      department: payload.team,
+      position: payload.rank,
+      ai_experience: payload.aiExperience,
+      learning_goal: payload.goal,
+      dietary_restrictions: payload.dietary.trim() || null,
+    });
+    setSubmitting(false);
+
+    if (error) {
+      // unique 제약 위반(23505) → 이메일 중복으로 안내
+      if (error.code === "23505") {
+        setErrors((prev) => ({ ...prev, email: "이미 신청한 이메일입니다." }));
+      } else {
+        setSubmitError("신청 처리 중 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.");
+        console.error("Supabase insert error:", error);
+      }
+      return;
+    }
 
     setSubmittedEmails((prev) => [...prev, payload.email.toLowerCase()]);
     setSubmitted(true);
@@ -233,11 +267,18 @@ export default function RegistrationForm() {
         </Field>
       </div>
 
+      {submitError && (
+        <p className="mt-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600">
+          {submitError}
+        </p>
+      )}
+
       <button
         type="submit"
-        className="mt-8 w-full rounded-lg bg-[#ff6b35] px-6 py-3.5 text-base font-bold text-white shadow-lg shadow-[#ff6b35]/30 transition hover:bg-[#e85d2a] active:scale-[0.99]"
+        disabled={submitting}
+        className="mt-8 w-full rounded-lg bg-[#ff6b35] px-6 py-3.5 text-base font-bold text-white shadow-lg shadow-[#ff6b35]/30 transition hover:bg-[#e85d2a] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
       >
-        신청하기
+        {submitting ? "신청 중…" : "신청하기"}
       </button>
     </form>
   );
